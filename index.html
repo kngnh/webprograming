@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>타자 속도 측정기</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        text-align: center;
+        margin: 40px;
+      }
+      .container {
+        max-width: 800px;
+        margin: auto;
+      }
+      textarea {
+        width: 100%;
+        height: 100px;
+        font-size: 1.2em;
+      }
+      .hidden {
+        display: none;
+      }
+      .highlight {
+        color: green;
+        font-weight: bold;
+      }
+      .faded {
+        color: #bbb;
+        font-size: 0.9em;
+        margin-top: 5px;
+      }
+      .info {
+        font-size: 1em;
+        color: #333;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body onload="init()">
+    <div class="container">
+      <h1><b>🧠 타자 속도 측정기</b></h1>
+
+      <div>
+        <label
+          ><input type="radio" name="mode" value="short" checked /> 단문
+          연습</label
+        >
+        <label><input type="radio" name="mode" value="long" /> 장문 연습</label>
+      </div>
+
+      <div id="longTitleSelector" class="hidden">
+        <p>글을 선택하세요 :</p>
+        <select id="longTitleSelect">
+          <option value="" disabled selected>글 선택</option>
+        </select>
+      </div>
+      <br /><br />
+
+      <button onclick="startTest()">시작하기</button><br /><br />
+
+      <p id="nextSentence" class="faded"></p>
+      <p id="sentenceDisplay"></p>
+      <textarea id="userInput" disabled></textarea>
+
+      <div class="info">
+        경과 시간 : <span id="elapsedTime">0.00</span>초<br />
+        현재 타수 : <span id="currentSpeed">0</span> 타/분<br />
+        문장 : <span id="currentIndex">0</span>/<span id="totalCount">0</span>
+      </div>
+
+      <div class="result" id="result"></div>
+    </div>
+
+    <script>
+      let mode = "short";
+      let sentences = [];
+      let longTextGroups = {};
+      let currentIndex = 0;
+      let startTime, pauseStart, timerInterval;
+      let keystrokeCount = 0,
+        totalMistakes = 0;
+      let totalTime = 0;
+      let isPaused = false;
+
+      document.getElementsByName("mode").forEach((radio) => {
+        radio.addEventListener("change", async (e) => {
+          mode = e.target.value;
+          document
+            .getElementById("longTitleSelector")
+            .classList.toggle("hidden", mode !== "long");
+          document.getElementById("result").innerHTML = "";
+          if (mode === "long") {
+            await loadLongTitles();
+          }
+        });
+      });
+
+      async function loadLongTitles() {
+        const res = await fetch("long.txt");
+        const lines = (await res.text())
+          .trim()
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter((line) => line);
+        longTextGroups = {};
+        let currentTitle = "";
+        for (let line of lines) {
+          if (/^\d+\./.test(line)) {
+            currentTitle = line.replace(/^\d+\.\s*/, "");
+            longTextGroups[currentTitle] = [];
+          } else {
+            longTextGroups[currentTitle].push(line);
+          }
+        }
+        const selector = document.getElementById("longTitleSelect");
+        selector.innerHTML =
+          '<option value="" disabled selected>글 선택</option>';
+        for (let title in longTextGroups) {
+          const opt = document.createElement("option");
+          opt.value = title;
+          opt.textContent = title;
+          selector.appendChild(opt);
+        }
+      }
+
+      async function startTest() {
+        document.getElementById("result").innerHTML = "";
+        document.getElementById("nextSentence").innerText = "";
+        currentIndex = 0;
+        keystrokeCount = 0;
+        totalMistakes = 0;
+        totalTime = 0;
+        document.getElementById("userInput").value = "";
+
+        if (mode === "short") {
+          const res = await fetch("short.txt");
+          const lines = (await res.text())
+            .trim()
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter((line) => line);
+          sentences = shuffle(lines).slice(0, 3);
+          beginTyping();
+        } else {
+          const selector = document.getElementById("longTitleSelect");
+          const selected = selector.value;
+          if (!selected) {
+            alert("글을 선택하세요.");
+            return;
+          }
+          sentences = longTextGroups[selected] || [];
+          beginTyping();
+        }
+      }
+
+      function beginTyping() {
+        startTime = new Date();
+        document.getElementById("totalCount").innerText = sentences.length;
+        document.getElementById("currentIndex").innerText = 1;
+        document.getElementById("sentenceDisplay").innerText = sentences[0];
+        document.getElementById("nextSentence").innerText = sentences[1] || "";
+        document.getElementById("userInput").disabled = false;
+        document.getElementById("userInput").focus();
+        isPaused = false;
+        timerInterval = setInterval(updateTime, 100);
+      }
+
+      function updateTime() {
+        if (isPaused) return;
+        const seconds = (new Date() - startTime) / 1000;
+        document.getElementById("elapsedTime").innerText = seconds.toFixed(2);
+        const speed =
+          seconds > 0 ? Math.round(keystrokeCount / (seconds / 60)) : 0;
+        document.getElementById("currentSpeed").innerText = speed;
+      }
+
+      document
+        .getElementById("userInput")
+        .addEventListener("keydown", function (e) {
+          const ignoredKeys = [
+            "Shift",
+            "Control",
+            "Alt",
+            "Meta",
+            "Tab",
+            "Escape",
+            "CapsLock",
+          ];
+          if (!ignoredKeys.includes(e.key)) {
+            keystrokeCount++;
+            if (isPaused) {
+              const pausedDuration = new Date() - pauseStart;
+              startTime = new Date(startTime.getTime() + pausedDuration);
+              isPaused = false;
+            }
+          }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            handleSentenceComplete();
+          }
+        });
+
+      function handleSentenceComplete() {
+        const input = document.getElementById("userInput").value;
+        const target = sentences[currentIndex];
+        let mistakes = 0;
+        for (let i = 0; i < Math.max(input.length, target.length); i++) {
+          if (input[i] !== target[i]) mistakes++;
+        }
+        totalMistakes += mistakes;
+        currentIndex++;
+        if (currentIndex < sentences.length) {
+          document.getElementById("currentIndex").innerText = currentIndex + 1;
+          document.getElementById("sentenceDisplay").innerText =
+            sentences[currentIndex];
+          document.getElementById("nextSentence").innerText =
+            sentences[currentIndex + 1] || "";
+          document.getElementById("userInput").value = "";
+          isPaused = true;
+          pauseStart = new Date();
+        } else {
+          clearInterval(timerInterval);
+          const totalTimeElapsed = (new Date() - startTime) / 1000;
+          const typingCount = Math.round(
+            keystrokeCount / (totalTimeElapsed / 60)
+          );
+          document.getElementById("sentenceDisplay").innerText = "";
+          document.getElementById("nextSentence").innerText = "";
+          document.getElementById("userInput").disabled = true;
+          document.getElementById("result").innerHTML =
+            `<p><span class="highlight">결과 :</span></p>` +
+            `<ul><li>⏱️ 총 시간 : ${totalTimeElapsed.toFixed(2)}초</li>` +
+            `<li>⌨️ 평균 타수 : ${typingCount} 타/분</li>` +
+            `<li>❗ 총 오타 수 : ${totalMistakes}</li></ul>`;
+        }
+      }
+
+      function shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+      }
+
+      async function init() {
+        if (mode === "long") {
+          await loadLongTitles();
+        }
+      }
+    </script>
+  </body>
+</html>
